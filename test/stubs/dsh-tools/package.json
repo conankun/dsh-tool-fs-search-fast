@@ -1,0 +1,5 @@
+{
+  "name": "@deepseek-ai/dsh-tools",
+  "type": "module",
+  "main": "index.js"
+}

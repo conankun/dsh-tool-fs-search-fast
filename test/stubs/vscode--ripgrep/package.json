@@ -1,0 +1,5 @@
+{
+  "name": "@vscode/ripgrep",
+  "type": "module",
+  "main": "index.js"
+}

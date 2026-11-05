@@ -1,0 +1,5 @@
+{
+  "name": "@deepseek-ai/dsh-timeout",
+  "type": "module",
+  "main": "index.js"
+}

@@ -1,223 +1,179 @@
----
-description: "The model-facing glob and grep discovery tools for users and maintainers composing or debugging workspace search for agents."
-kind: "package-reference"
----
+# @yuna/dsh-tool-fs-search-fast
 
-# @deepseek-ai/dsh-tool-fs-search
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![glob ~40x faster](https://img.shields.io/badge/glob-~40x%20faster-blue.svg)](#how-much-faster)
 
-English | [中文](README.zh.md)
+Fast fork of DeepSeek Harness's `@deepseek-ai/dsh-tool-fs-search` — the plugin that
+provides the model-facing `glob` and `grep` tools. Same tool names, same schemas,
+same result contract; a much faster engine underneath.
 
-## Summary
+The published package ships only a compiled `lib/index.js`, so this repo forks
+that bundle directly and documents every change against it
+(`docs/upstream-README.md`, `docs/upstream-package.json` are the untouched
+upstream copies).
 
-Use `dsh-tool-fs-search` to give models `glob` file discovery and `grep` content search over a local workspace. Searches need no host `rg` installation or filesystem provider, return workdir-relative results, and include hidden and ignored files while excluding VCS metadata. Configurable caps bound inline output; with an optional spill store, capped results remain fully recoverable. Choose the sibling `dsh-tool-fs` package for reading, writing, or editing files.
+**English** · [한국어](README.ko.md)
 
-## Table of Contents
+> **Install path: a profile bundle package.** The fork is a normal DSH plugin
+> package; it lives in `~/.dsh/profiles/<profile>`, never inside the Electron
+> `app.asar`. Rewriting `app.asar` is retired — see [docs/ASAR.md](docs/ASAR.md)
+> for the legacy mechanism and why it is no longer used.
 
-- [Use this package](#use-this-package)
-- [Understand the implementation](#understand-the-implementation)
-- [Further Exploration](#further-exploration)
-- [Model Experience](#model-experience)
-- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
-- [Dev Note](#dev-note)
+## How much faster
 
------
+Measured end-to-end through the DSH tools themselves, 18-core Apple Silicon, warm cache:
 
-<a id="use-this-package"></a>
-## Use this package
+- `glob **/*.ts` over a 1.16 M-file tree: **7.25 s → 0.18 s** (~40×)
+- `grep import` over the same tree: **1.26 s then `SEARCH_RAW_OUTPUT_OVERFLOW` → 50 ms**, 250 matches
+- `glob **/*.ts` over a 62 k-file repo: **0.70 s → 0.13 s** (~5×)
+- fixed shim overhead vs the stock binary on a 2-file tree: **+4–6 ms**
+- nothing to prune, 1.34 M files (search root inside an excluded dir): **4.1 s → 1.6 s** (~2.6×)
 
-Searches use the Session's current working directory, including changes made with `working_directory`.
+Likewise on a many-core host (AMD EPYC 9965, 768 threads, Node 22, rg 14.1.1, warm cache):
 
-Mount the tools after a `ctx.subprocess` backend; no host `rg` install is needed, and no filesystem provider is required. The model then gets modification-time-ordered file discovery and line-oriented content search, each bounded and timeout-guarded.
+| case | upstream | this fork | |
+| --- | --- | --- | --- |
+| `glob **/*.ts`, 1.18 M files (98% under `node_modules`) | 2 633 ms | **78 ms** | 34× |
+| `glob **/*`, 1.34 M files, pruning disabled | 4 144 ms | **1 564 ms** | 2.6× |
+| `grep import`, 982 k files | 883 ms, 615 MB collected | **36 ms**, 250 matches | 25× |
+| `grep a`, 982 k files | 18 816 ms, 35 GB collected | **674 ms**, 250 matches | 28× |
 
-### Minimal composition
+Two argv/pipeline decisions in the upstream plugin dominate latency:
 
-A subprocess backend, then the tools; the spill backend is optional and makes capped results fully recoverable.
+| upstream | problem |
+| --- | --- |
+| `rg --files --glob=<p> --sort=modified --no-ignore --hidden` | `--sort=modified` forces ripgrep to run **single-threaded** and to stat every visited file in that one thread; `--no-ignore` walks `node_modules` and friends |
+| `rg --json …` collected **completely**, then truncated to the first N matches | a broad pattern on a large tree exceeds the 20 MB raw-output cap and hard-fails with `SEARCH_RAW_OUTPUT_OVERFLOW` before any result is shown |
+
+Measured on an 18-core Apple Silicon machine (warm cache):
+
+| call | upstream | this fork | speedup |
+| --- | --- | --- | --- |
+| `glob **/*.ts` over a 1.16M-file tree (95% under artifact dirs) | 7252 ms | ~180 ms | **~40×** |
+| `grep import` over the same tree | 1.26 s, then overflow error | ~50 ms, 250 matches | **~25×** |
+| `glob **/*.ts` over a 62k-file repo | ~700 ms | ~130 ms | **~5×** |
+
+## What changed in `lib/index.js`
+
+1. `buildGlobCommand`: `--sort=modified` removed, `--threads=0` added, and
+   configurable build-artifact directories (`globExcludeDirs`, default
+   `node_modules .venv venv __pycache__ .next .nuxt .turbo .cache Pods .gradle
+   target`) are appended **after** the caller's `--glob` pattern — ripgrep is
+   last-match-wins, so order matters and prepending them would make pruning
+   inert for broad patterns.
+2. New `sortPathsByMtime`: the documented "modification-time order" the old
+   single-threaded sort produced (mtime **ascending**, the exact semantics of
+   `rg --sort=modified`) is restored afterwards at **nanosecond** precision with
+   a stable sort. The stat fan-out runs on **worker threads** (`fs.statSync`
+   inside a worker is not limited by the main thread's libuv pool, which is only
+   4 concurrent syscalls by default); below 8 192 paths it stays inline.
+3. New `isInsideExcludedDir`: an explicit `path` that already sits inside a
+   pruned directory disables pruning for that call, so deliberate searches
+   there still work.
+4. New `runRipgrepStreaming`: `grep` now forwards the NDJSON stream and
+   terminates ripgrep at the match cap, instead of collecting the whole stream
+   through the subprocess seam. The output is an exact prefix of the full run
+   (validated record-for-record), so the first-N contract is unchanged.
+5. `Config` gained `globExcludeDirs`; the glob tool description now states the
+   pruning behaviour. Everything else (schemas, retention, spill, presentation,
+   error vocabulary, exit-code handling) is upstream code, untouched.
+
+## Install as a profile bundle package
+
+The package is a DSH **bundle**: `package.json` carries
+`dsh.bundle.patch` and the bundle layer (`cordis.patch.yml`) inserts the fast
+row. Everything the plugin needs at runtime — `@deepseek-ai/*` peers and
+`@vscode/ripgrep` — is a **peer dependency**, so the profile runtime resolves
+them from the DSH installation: nothing is downloaded and the fork always uses
+the ripgrep binary the app shipped.
+
+### What the profile looks like
+
+```
+~/.dsh/profiles/<profile>/
+  package.json
+    dependencies["@yuna/dsh-tool-fs-search-fast"] =
+      "git+https://github.com/conankun/dsh-tool-fs-search-fast.git#main"
+    dsh.profile.bundles += "@yuna/dsh-tool-fs-search-fast"
+  cordis.patch.yml
+    - id: tool-fs-search
+      name: '@deepseek-ai/dsh-tool-fs-search'
+      disabled: true                     # exactly one glob/grep provider
+  node_modules/@yuna/dsh-tool-fs-search-fast/   installed by pnpm
+```
+
+### Steps
+
+1. Install the package into the profile:
+   `pnpm add "git+https://github.com/conankun/dsh-tool-fs-search-fast.git#main"`
+   (a `file:` dependency on a local checkout works the same way for development).
+2. Append `"@yuna/dsh-tool-fs-search-fast"` to `dsh.profile.bundles` — after
+   `@deepseek-ai/dsh-base`, so the stock row exists before the profile layer
+   disables it.
+3. Add the `disabled: true` row above to the profile's `cordis.patch.yml`.
+4. Restart DSH: the plugin tree is composed at boot.
+
+Check the composition without booting:
+
+```
+dsh --profile <profile> --dump-config | grep -A3 tool-fs-search
+# == @yuna/dsh-tool-fs-search-fast   <- inserted
+# - id: tool-fs-search                  <- stock row, disabled: true
+```
+
+### The Electron-managed profile
+
+`dsh plugin --profile desktop …` is refused ("profile desktop is managed
+exclusively by the Electron application"). Edit the desktop profile's
+`package.json` and `cordis.patch.yml` directly as above, then restart the app.
+
+### App updates
+
+The install lives in `~/.dsh`, which an app update does not touch, so the fork
+**survives a DeepSeek Harness update** — unlike the retired `app.asar` patch,
+which an update wipes. What can change is the plugin API: the peers are pinned
+to the app version the fork was written against, so after a DSH release run
+`pnpm update @yuna/dsh-tool-fs-search-fast` (or bump `#main`) and
+`npm test` against the new app.
+
+## Config
+
+The entry's config is patched in the profile layer (bundle defaults come from
+`cordis.patch.yml` in this repo):
 
 ```yaml
-- name: '@deepseek-ai/dsh-subprocess-local'
-- name: '@deepseek-ai/dsh-tool-fs-search'
+- id: tool-fs-search-fast
   config:
     sampleOverCapGlobResults: false
-- name: '@deepseek-ai/dsh-spill-local'
+    globExcludeDirs: []        # [] = exact upstream glob semantics (no pruning)
 ```
 
-`sampleOverCapGlobResults` is required and has no fallback: deployments choose the over-cap ordering contract explicitly. When formatted spill succeeds, both modes preserve the complete sorted list in the spill artifact.
-
-### The tools
-
-| Tool | Arguments | Behavior |
-|---|---|---|
-| `glob` | `pattern`, `path?` | Finds files whose paths match a glob pattern, including hidden and ignored files but excluding VCS metadata; a pattern with no `/` matches basenames at any depth, so `*` matches the whole tree; complete results stay modification-time ordered |
-| `grep` | `pattern`, `path?`, `include?` | Searches file contents with a ripgrep regex and returns matches grouped by file as `Line N: <preview>`; `include` is one positive glob filter, with comma-separated lists and negated values rejected up front |
-
-Routine budgets stay out of the model-facing schema: a model that needs surrounding context reads the matched file with `read`, and one that needs later results follows the returned spill locator's retrieval hint.
-
-### Configuration
-
-`sampleOverCapGlobResults` is required; the remaining keys are optional search caps with the defaults below.
-
-| Key | Default | Meaning |
-|---|---|---|
-| `sampleOverCapGlobResults` | none (required) | `true` samples an over-cap `glob` page across top-level entries; `false` keeps the modification-time-ordered head |
-| `globMaxResults` | `100` | Max paths one `glob` call shows inline |
-| `grepMaxMatches` | `250` | Max flat matches one `grep` call retains inline; later matches go to the formatted spill artifact |
-| `grepMaxLineBytes` | `2000` | Byte cap per matched-line preview, preserving UTF-8 boundaries |
-| `rawOutputMaxBytes` | `20000000` | Max complete raw `rg` stdout a search will parse; larger raw output fails with `SEARCH_RAW_OUTPUT_OVERFLOW` |
-| `timeoutMs` | `30000` | Cooperative tool-call budget on both tools, enforced through `exec.signal` |
-| `graceMs` | `3000` | Terminate-escalation grace the subprocess seam grants past `timeoutMs` |
-| `stderrMaxBytes` | `65536` | Diagnostic-tail budget for `rg` stderr |
-| `searchMetaMaxBytes` | `65536` | Max bytes of one search's serialized `presentationMeta`; trailing groups/paths drop past it |
-
-The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-tool-fs-search) is the exhaustive source for every accepted field and its JSDoc.
-
-### Deployment requirement
-
-Node deployments receive the `@vscode/ripgrep` platform package on supported macOS, Linux, and Windows targets; Python SDK wheels copy the target-native binary beside the single-file runtime as a `-rg` sidecar. No carrier requires a host `rg`. Returned paths are displayed relative to the resolved workdir (the calling session's cwd when present) and are follow-up-readable with `read` only when that workdir and the filesystem root are the same workspace.
-
-### Failures and recovery
-
-Search failures carry the package-owned codes `SEARCH_INVALID_PATTERN` (ripgrep rejected the regex or glob), `SEARCH_FAILED` (a failed launch, inaccessible target, signal kill, or malformed `--json` output), `SEARCH_RAW_OUTPUT_OVERFLOW` (raw output over the cap), and `SEARCH_ABORTED` (cooperative timeout or caller cancellation). Exit 0 is success with results and exit 1 is a successful empty search; model argument mistakes stay ordinary tool argument errors.
-
------
-
-<a id="understand-the-implementation"></a>
-## Understand the implementation
-
-<details>
-<summary>Implementation internals — click to expand</summary>
-
-This section explains the design decisions behind the search tools and points at the code that realizes them; the observable behavior is fully covered in [Use this package](#use-this-package).
-
-### Design concept
-
-Local workspace discovery is naturally a process-backed `rg` workflow, and putting search on `ctx.fs` would force every filesystem backend to grow a search API. The subprocess seam owns spawn execution, process-tree termination, environment scrubbing, and bounded output capture; this package owns schemas, argument validation, argv construction, parsing, retention, formatted-result spill, and timeout declaration. The tools never expose a background job — the call returns only after `rg` exits, is terminated by the cooperative timeout, is aborted, or fails.
-
-### Source map
-
-| File | Role |
-|---|---|
-| [`src/index.ts`](src/index.ts) | Plugin entry: `Config`, tool composition, cap validation |
-| [`src/glob.ts`](src/glob.ts) | `glob` schema, argv, parsing, inline sampling, formatting |
-| [`src/grep.ts`](src/grep.ts) | `grep` schema, argv, `--json` parsing, preview retention, formatting |
-| [`src/search-core.ts`](src/search-core.ts) | Shared spawn helper, `SEARCH_*` errors, spill handoff, workdir-relative display |
-| [`src/presentation.ts`](src/presentation.ts) | Search-card metadata projection |
-| [`src/direct-call.ts`](src/direct-call.ts) | Direct-call result acceptance for spill post-processing |
-
-### How a search runs
-
-Each call resolves the packaged binary (`@vscode/ripgrep`, or the executable's `-rg` sidecar in a pkg single-file runtime), prepends `--no-config` so a host `RIPGREP_CONFIG_PATH` cannot inject a `--pre` preprocessor into the unconfined spawn, and passes every model-controlled value as a plain argv element — no shell layer exists, so no quoting applies. Collect-mode budgets bound complete stdout and a stderr tail; a lossy stdout read fails as `SEARCH_RAW_OUTPUT_OVERFLOW` rather than parsing a silently-partial stream. The tools never read a raw spill path.
-
-### Two budgets, two artifacts
-
-Raw stdout and stderr are internal transport details; the tools always collect the complete result in memory, and only the inline page is capped. When a call yields more logical results than the inline cap, a best-effort spill saves the complete formatted preview to the spill store and the page carries its locator, while dispatches whose full value never enters model context skip the spill. Missing or failed spill keeps the inline page and reports that the complete result could not be saved — never an error. The collection and spill handoff live in `src/search-core.ts` and `src/presentation.ts`.
-
-</details>
-
------
-
-<a id="further-exploration"></a>
-## Further Exploration
-
-Read these pages when the package-level contract is not enough. They move from the tools to the subprocess seam, the spill store, and the filesystem family.
-
-- [Filesystem subsystem](../../../docs/subsystems/filesystem.md) — exhaustive provider contract, policy events, and error taxonomy.
-- [tool-fs](../tool-fs/README.md) — the sibling `read`/`write`/`edit` tools for follow-up reads.
-- [Subprocess capability](../../../docs/subsystems/subprocess.md) — the spawn seam these tools execute through.
-- [Spill store](../../spill/spill/README.md) — the optional backend that makes capped results fully recoverable.
-- [Timeout utility](../../util/timeout/README.md) — the `MAX_TIMER_DELAY_MS` bound on the terminate grace.
-- [Generated tool catalog](../../../docs/tool-catalog.md#deepseek-aidsh-tool-fs-search) — the exhaustive schemas this package registers.
-
------
-
-<a id="model-experience"></a>
-## Model Experience
-
-### System prompt
-
-#### What the model sees
-
-At assembly time, each section checks `ctx.tools.get(name, scope)` and renders only while its tool is visible. The grep paragraph includes its read follow-up sentence only while read is visible. The original text and section order stay unchanged for the same supported tool set, including PTC capabilities behind `run_code`. This scope-dependent text selection applies to system-prompt sections. Tool schema descriptions remain registration-time text and do not name other tools.
-
-##### Glob guidance
-
-```markdown
-Use the glob tool — not shell find — to discover files by path pattern.
-```
-
-##### Grep guidance
-
-```markdown
-Use the grep tool — not shell grep or rg — to search file contents. Use read on a matched file when you need surrounding context.
-```
-
-#### Token effect
-
-Guidance cost follows the visible tools; the required sampling choice selects one glob variant.
-
-#### KV Cache effect
-
-Prefix-stable while the visible tool set, plugin scope, sampling choice, and guidance text are unchanged. Restrictions, activation, disposal, or changing the choice may invalidate reuse from the first changed section.
-
-### Tool schemas
-
-#### What the model sees
-
-The glob description states the configured over-cap ordering. The generated [`glob` and `grep` schemas](../../../docs/tool-catalog.md#deepseek-aidsh-tool-fs-search) use `sampleOverCapGlobResults: true`; the tools are registered unconditionally.
-
-#### Token effect
-
-Fixed schema cost on every request where the tools are visible.
-
-#### KV Cache effect
-
-Prefix-stable while tool visibility and definitions are unchanged. Registration lifecycle or scoped restrictions may invalidate reuse from the first changed schema token.
-
-### Results and spill notices
-
-#### What the model sees
-
-`glob` returns one path per line; `grep` groups `Line <line>: <preview>` matches beneath each path. Empty searches return `No files found` or `No matches found`. A capped result ends with its omission count plus the spill locator and backend retrieval hint, or says the complete result could not be saved. With `sampleOverCapGlobResults: true`, an over-cap `glob` page takes paths round-robin across entries immediately beneath the actual search root, and the footer states the sampled basis and how many top-level entries it reached; with `false`, the page is the modification-time-ordered head and keeps the plain capped-result footer. The spill artifact always holds the complete list in modification-time order.
-
-#### Token effect
-
-Inline paths and matches are bounded by `globMaxResults`, `grepMaxMatches`, and `grepMaxLineBytes`; the call and retained result remain in history until compaction.
-
-#### KV Cache effect
-
-Append-only; newly visible content follows the reusable request prefix and does not invalidate existing KV-cache entries.
-
-### Tool errors
-
-#### What the model sees
-
-Failures are normalized as `Error: <message>` with structured `SEARCH_INVALID_PATTERN`, `SEARCH_FAILED`, `SEARCH_RAW_OUTPUT_OVERFLOW`, or `SEARCH_ABORTED` metadata for callers.
-
-#### Token effect
-
-Only a failing call adds these retained tokens.
-
-#### KV Cache effect
-
-Append-only; newly visible content follows the reusable request prefix and does not invalidate existing KV-cache entries.
-
-## Known Limitations and Deferred Work
-
-<a id="known-limitations-and-deferred-work"></a>
-
-
-These limits define when the search tools are a poor fit or need special operational care. They are current package constraints, not a general search comparison or a task backlog.
-
-- **Search and file access have no shared-workspace proof** — returned paths are follow-up-readable only when the workdir and filesystem root denote the same workspace; the package performs no runtime cross-service validation.
-- **The packaged binary is fixed at dependency version** — Node deployments use the version selected by `@vscode/ripgrep`; Python single-file runtimes copy that target-native version into the required `-rg` sidecar. An unsupported platform or a corrupted installation fails with `SEARCH_FAILED`, while the Python runtime package rejects a missing sidecar before launch. Remote or virtual filesystems need a co-located workspace or another search consumer.
-- **The schemas expose one bounded page** — offset pagination, case-mode switches, alternate output modes, and provider-backed discovery remain outside this package; capped complete output requires a spill backend.
-- **Sampling, when enabled, groups by first path segment beneath the search root only** — an over-cap `glob` page balances across those top-level entries, so a result concentrated deeper is still shown unevenly below that level; recursive balancing is deferred.
-
-<a id="dev-note"></a>
-### Dev Note
-
-<details>
-<summary>Working context for maintainers — click to expand</summary>
-
-None.
-
-</details>
+Defaults: artifact-directory pruning on, grep stops at 250 matches. A `disabled:
+true` row for the stock `tool-fs-search` keeps exactly one provider of the
+`glob`/`grep` tool names.
+
+## Validation
+
+- `node --check lib/index.js` on every change.
+- `npm test` (`test/sandbox.sh`) runs `test/run.mjs` against stub peer packages —
+  offline, no app install needed (this is what CI runs).
+- `npm run test:app` runs the same suite through Electron-as-node against a real
+  `app.asar`, which exercises the real peer dependency versions.
+- Parity against `rg.real`: identical path sets; byte-identical order except
+  files with exactly equal nanosecond mtimes (ripgrep's own tie order is
+  unstable).
+- Profile install verified with a real boot: corrupting the profile copy of
+  `lib/index.js` makes DSH fail with `failed to import` on that path — proof the
+  profile package (not the app bundle) is what loads.
+
+## Legacy: in-place `app.asar` fork
+
+`tools/install.mjs` swaps the app bundle's `@deepseek-ai/dsh-tool-fs-search`
+with this fork (original kept as `app.asar.bak-fast-<ts>`, restored byte-for-byte
+by `tools/uninstall.mjs`). It is retired: an app update wipes it, and the bundle
+install above needs no archive surgery. The tooling is kept for an app build that
+cannot load profile packages; see [docs/ASAR.md](docs/ASAR.md).
+
+## License
+
+MIT — inherited from the upstream package. See [LICENSE](LICENSE).

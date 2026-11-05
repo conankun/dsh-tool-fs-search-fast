@@ -1,0 +1,8 @@
+# @yuna/dsh-tool-fs-search-fast — bundle layer.
+# Inserts the fast glob/grep row; the profile layer disables the stock
+# @deepseek-ai/dsh-tool-fs-search row so only one provider registers the tools.
+- insert:
+    - id: tool-fs-search-fast
+      name: "@yuna/dsh-tool-fs-search-fast"
+      config:
+        sampleOverCapGlobResults: false

@@ -1,0 +1,5 @@
+{
+  "name": "@deepseek-ai/schemastery",
+  "type": "module",
+  "main": "index.js"
+}
