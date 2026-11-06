@@ -10,7 +10,9 @@ same result contract; a much faster engine underneath.
 The published package ships only a compiled `lib/index.js`, so this repo forks
 that bundle directly and documents every change against it
 (`docs/upstream-README.md`, `docs/upstream-package.json` are the untouched
-upstream copies).
+upstream copies). **Base: upstream `0.2.2-rc.1`** — the manifest pins that DSH
+runtime version in its peers, and a profile running a different DSH version
+skips the bundle (see [App updates](#app-updates)).
 
 **English** · [한국어](README.ko.md)
 
@@ -77,6 +79,11 @@ Measured on an 18-core Apple Silicon machine (warm cache):
 5. `Config` gained `globExcludeDirs`; the glob tool description now states the
    pruning behaviour. Everything else (schemas, retention, spill, presentation,
    error vocabulary, exit-code handling) is upstream code, untouched.
+6. Rebased onto upstream `0.2.2-rc.1`: its two new behaviours are part of this
+   bundle — literal directory-prefix pruning (`--glob=!**` plus
+   `--glob={dir,...}/`, first, so the caller's pattern still last-wins) and the
+   empty-`include` handling in `grep`. The artifact-directory globs keep coming
+   after the caller's pattern.
 
 ## Install as a profile bundle package
 
@@ -132,7 +139,10 @@ exclusively by the Electron application"). Edit the desktop profile's
 The install lives in `~/.dsh`, which an app update does not touch, so the fork
 **survives a DeepSeek Harness update** — unlike the retired `app.asar` patch,
 which an update wipes. What can change is the plugin API: the peers are pinned
-to the app version the fork was written against, so after a DSH release run
+to `0.2.2-rc.1`, the app version this bundle was rebased against. After a DSH
+release the profile loader finds the old pin unmet and **skips the bundle**
+(glob/grep silently fall back to the stock provider), so rebase onto the new
+upstream `lib/index.js`, bump the peers, then
 `pnpm update @yuna/dsh-tool-fs-search-fast` (or bump `#main`) and
 `npm test` against the new app.
 

@@ -45,9 +45,33 @@ check("vcs exclude kept", argv.includes("--glob=!**/.git"));
 const noPrune = mod.buildGlobCommand({ pattern: "**/*" }, []);
 check("empty excludeDirs disables pruning", !noPrune.some((a) => a.includes("node_modules")));
 
+// upstream 0.2.2-rc.1 delta: literal directory prefixes prune unrelated subtrees.
+const prefixed = mod.buildGlobCommand({ pattern: "src/lib/*.ts" });
+check("literal prefix pruning adds exclude-all + directory glob", prefixed.includes("--glob=!**") && prefixed.includes("--glob={src,lib}/"), JSON.stringify(prefixed));
+check("literal prefix pruning precedes the pattern (last-match-wins)", prefixed.indexOf("--glob={src,lib}/") < prefixed.indexOf("--glob=src/lib/*.ts"));
+const wildcardPrefix = mod.buildGlobCommand({ pattern: "src/**/*.ts" });
+check("wildcard directory disables prefix pruning", !wildcardPrefix.includes("--glob=!**"));
+const withPath = mod.buildGlobCommand({ pattern: "src/lib/*.ts", path: "src" });
+check("explicit path disables prefix pruning", !withPath.includes("--glob=!**"));
+
 check("isInsideExcludedDir node_modules", mod.isInsideExcludedDir("a/node_modules/b", ["node_modules"]) === true);
 check("isInsideExcludedDir negative", mod.isInsideExcludedDir("src/lib", ["node_modules"]) === false);
 check("isInsideExcludedDir absolute", mod.isInsideExcludedDir("/x/node_modules", ["node_modules"]) === true);
+
+// upstream 0.2.2-rc.1 delta: an exact empty `include` is treated as omitted.
+check("empty include treated as omitted", mod.parseGrepArgs({ pattern: "x", include: "" }).include === void 0);
+check("non-empty include preserved", mod.parseGrepArgs({ pattern: "x", include: "*.ts" }).include === "*.ts");
+const emptyIncludeCard = mod.presentGrepCall({ pattern: "x", include: "" });
+check("empty include adds no filter to card title", emptyIncludeCard.title === "Grep x", String(emptyIncludeCard.title));
+const whitespaceIncludeRejected = (() => {
+  try {
+    mod.parseGrepArgs({ pattern: "x", include: "   " });
+    return false;
+  } catch {
+    return true;
+  }
+})();
+check("whitespace-only include still rejected", whitespaceIncludeRejected);
 
 const cfg = mod.Config({ sampleOverCapGlobResults: false });
 check("Config default globExcludeDirs", Array.isArray(cfg.globExcludeDirs) && cfg.globExcludeDirs.includes("node_modules"), JSON.stringify(cfg.globExcludeDirs));

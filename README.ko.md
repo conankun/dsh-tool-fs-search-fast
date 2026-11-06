@@ -6,7 +6,9 @@ DeepSeek Harness의 `@deepseek-ai/dsh-tool-fs-search` 포크 — 모델에게 �
 
 업스트림은 컴파일된 `lib/index.js`만 배포하므로, 이 저장소는 그 번들을 직접
 포크하고 변경점을 문서화합니다 (`docs/upstream-README.md`,
-`docs/upstream-package.json`은 손대지 않은 업스트림 원본).
+`docs/upstream-package.json`은 손대지 않은 업스트림 원본). **베이스: 업스트림
+`0.2.2-rc.1`** — 매니페스트 피어가 그 DSH 런타임 버전을 고정하며, 다른 DSH
+버전의 프로필은 이 번들을 건너뜁니다([앱 업데이트](#앱-업데이트) 참고).
 
 [English](README.md) · **한국어**
 
@@ -70,6 +72,10 @@ DSH 도구 자체를 통해 end-to-end 측정, 18코어 Apple Silicon, 웜 캐�
    그대로입니다.
 5. `Config`에 `globExcludeDirs` 추가, glob 도구 설명에 프루닝 동작 명시. 그 외
    (스키마·retention·spill·표현·에러 어휘·exit code 처리)는 업스트림 코드 그대로.
+6. 업스트림 `0.2.2-rc.1`로 리베이스: 업스트림이 새로 넣은 두 동작을 이 번들에
+   포함합니다 — 리터럴 디렉터리 프리픽스 프루닝(`--glob=!**` + `--glob={dir,...}/`,
+   맨 앞에 두어 호출자 패턴이 여전히 last-match-wins)과 `grep`의 빈 `include`
+   처리. 산출물 디렉터리 glob은 계속 호출자 패턴 뒤에 붙습니다.
 
 ## 프로필 번들 패키지로 설치
 
@@ -124,9 +130,11 @@ exclusively by the Electron application"). 데스크톱 프로필은 위처럼
 설치는 `~/.dsh`에 있어 앱 업데이트가 건드리지 않습니다. 따라서 포크는 **DeepSeek
 Harness 업데이트 후에도 살아남습니다** — 업데이트가 지워버리는 (폐기된)
 `app.asar` 패치와 다른 점입니다. 바뀔 수 있는 것은 플러그인 API입니다. 피어가
-포크 작성 시점의 앱 버전에 맞춰져 있으므로, DSH 릴리스 후에는
-`pnpm update @yuna/dsh-tool-fs-search-fast`(또는 `#main` 갱신)와 새 앱에
-대한 `npm test`를 돌립니다.
+이 번들을 리베이스한 앱 버전 `0.2.2-rc.1`에 맞춰져 있으므로, DSH 릴리스 후에는
+프로필 로더가 옛 핀을 unmet으로 보고 **번들을 건너뜁니다**(glob/grep은 조용히
+스톡 제공자로 폴백). 따라서 새 업스트림 `lib/index.js`로 리베이스하고 피어를
+갱신한 뒤 `pnpm update @yuna/dsh-tool-fs-search-fast`(또는 `#main` 갱신)와
+새 앱에 대한 `npm test`를 돌립니다.
 
 ## 설정
 
