@@ -1,7 +1,7 @@
 {
   "name": "@yuna/dsh-tool-fs-search-fast",
   "description": "Fast fork of the model-facing filesystem discovery tools (glob, grep): parallel glob walk with nanosecond mtime ordering and artifact-dir pruning, streaming grep that stops at the match cap.",
-  "version": "0.2.2-rc.1-fast.1",
+  "version": "0.2.2-rc.1-fast.2",
   "private": true,
   "publishConfig": {
     "access": "restricted"
@@ -38,10 +38,10 @@
     "@deepseek-ai/dsh-system-prompt": ">=0.2.2-rc.1 <0.3.0",
     "@deepseek-ai/dsh-timeout": ">=0.2.2-rc.1 <0.3.0",
     "@deepseek-ai/dsh-tools": ">=0.2.2-rc.1 <0.3.0",
-    "@deepseek-ai/cordis": "~4.1.0",
+    "@deepseek-ai/cordis": ">=4.0.0 <5.0.0",
     "@deepseek-ai/dsh-working-directory": ">=0.2.2-rc.1 <0.3.0",
     "@vscode/ripgrep": "^1.18.0",
-    "@deepseek-ai/schemastery": "~3.19.0"
+    "@deepseek-ai/schemastery": ">=3.18.0 <4.0.0"
   },
   "scripts": {
     "build": "node --check lib/index.js",

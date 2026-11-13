@@ -10,9 +10,9 @@ same result contract; a much faster engine underneath.
 The published package ships only a compiled `lib/index.js`, so this repo forks
 that bundle directly and documents every change against it
 (`docs/upstream-README.md`, `docs/upstream-package.json` are the untouched
-upstream copies). **Base: upstream `0.2.2-rc.1`** — the manifest pins that DSH
-runtime version in its peers, and a profile running a different DSH version
-skips the bundle (see [App updates](#app-updates)).
+upstream copies). **Base: upstream `0.2.2-rc.1`** — the manifest accepts the
+whole `0.2.x` DSH line (`>=0.2.2-rc.1 <0.3.0` peers), so a profile on any 0.2.x
+runtime loads the bundle (see [App updates](#app-updates)).
 
 **English** · [한국어](README.ko.md)
 
@@ -138,11 +138,12 @@ exclusively by the Electron application"). Edit the desktop profile's
 
 The install lives in `~/.dsh`, which an app update does not touch, so the fork
 **survives a DeepSeek Harness update** — unlike the retired `app.asar` patch,
-which an update wipes. What can change is the plugin API: the peers are pinned
-to `0.2.2-rc.1`, the app version this bundle was rebased against. After a DSH
-release the profile loader finds the old pin unmet and **skips the bundle**
-(glob/grep silently fall back to the stock provider), so rebase onto the new
-upstream `lib/index.js`, bump the peers, then
+which an update wipes. What can change is the plugin API: the peers accept the whole `0.2.x` line
+(`>=0.2.2-rc.1 <0.3.0`, the range this bundle was rebased against), so a 0.2.x
+point release loads without a manifest edit. A `0.3.0` breaking change falls
+outside that range: the profile loader then **skips the bundle** (glob/grep
+silently fall back to the stock provider), so rebase onto the new upstream
+`lib/index.js`, raise the lower bound, then
 `pnpm update @yuna/dsh-tool-fs-search-fast` (or bump `#main`) and
 `npm test` against the new app.
 
